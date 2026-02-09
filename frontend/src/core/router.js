@@ -1,33 +1,116 @@
-import { getState } from "./store.js";
-import { moduleRoutes } from "./moduleRegistry.js";
+import { getState, getUsers, login, logout, setState } from "./store.js";
+import {
+  appModules,
+  appOrder,
+  buildRoute,
+  getDefaultRoute,
+  resolveRoute,
+  getTabView,
+} from "./moduleRegistry.js";
+import { createLoginModal } from "./ui/LoginModal.js";
 
-function buildNav(activePath) {
-  const nav = document.createElement("nav");
-  nav.className = "nav-links";
-  const { enabledModules } = getState();
-  enabledModules.forEach((code) => {
-    const mod = moduleRoutes[code];
-    if (!mod) return;
-    const link = document.createElement("a");
-    link.href = `#${mod.path}`;
-    link.textContent = mod.label;
-    if (activePath.startsWith(mod.path)) {
-      link.classList.add("active");
+function buildTabs(appCode, activeTab) {
+  const tabBar = document.createElement("nav");
+  tabBar.className = "tab-bar";
+  const app = appModules[appCode];
+  if (!app) return tabBar;
+  app.tabs.forEach((tab) => {
+    const button = document.createElement("a");
+    button.href = `#${buildRoute(appCode, tab.key)}`;
+    button.className = "tab";
+    button.textContent = tab.label;
+    if (tab.key === activeTab) {
+      button.classList.add("active");
     }
-    nav.appendChild(link);
+    tabBar.appendChild(button);
   });
-  return nav;
+  return tabBar;
 }
 
-function resolveRoute(path) {
-  const flatRoutes = {};
-  Object.values(moduleRoutes).forEach((mod) => {
-    flatRoutes[mod.path] = mod.view;
-    Object.entries(mod.routes || {}).forEach(([subPath, view]) => {
-      flatRoutes[subPath] = view;
-    });
+function buildSidebar(activeApp, activeTab) {
+  const sidebar = document.createElement("aside");
+  sidebar.className = "app-sidebar";
+
+  const brand = document.createElement("div");
+  brand.className = "app-logo";
+  brand.textContent = "EOEX";
+  sidebar.appendChild(brand);
+
+  const hamburger = document.createElement("button");
+  hamburger.className = "hamburger";
+  hamburger.type = "button";
+  hamburger.textContent = "☰ Apps";
+  hamburger.addEventListener("click", () => {
+    sidebar.classList.toggle("collapsed");
   });
-  return flatRoutes[path] || flatRoutes["/crm"];
+  sidebar.appendChild(hamburger);
+
+  const list = document.createElement("div");
+  list.className = "app-list";
+
+  appOrder.forEach((appCode) => {
+    const app = appModules[appCode];
+    if (!app) return;
+    const section = document.createElement("details");
+    section.open = appCode === activeApp;
+    section.className = "app-group";
+
+    const summary = document.createElement("summary");
+    summary.textContent = app.label;
+    section.appendChild(summary);
+
+    const items = document.createElement("div");
+    items.className = "app-items";
+    app.tabs.forEach((tab) => {
+      const link = document.createElement("a");
+      link.href = `#${buildRoute(appCode, tab.key)}`;
+      link.textContent = tab.label;
+      if (appCode === activeApp && tab.key === activeTab) {
+        link.classList.add("active");
+      }
+      items.appendChild(link);
+    });
+    section.appendChild(items);
+    list.appendChild(section);
+  });
+
+  sidebar.appendChild(list);
+  return sidebar;
+}
+
+function buildTopActions({ user, onLoginClick }) {
+  const actions = document.createElement("div");
+  actions.className = "top-actions";
+
+  const bell = document.createElement("button");
+  bell.className = "icon-button";
+  bell.type = "button";
+  bell.textContent = "🔔";
+  actions.appendChild(bell);
+
+  const setup = document.createElement("button");
+  setup.className = "icon-button";
+  setup.type = "button";
+  setup.textContent = "⚙";
+  actions.appendChild(setup);
+
+  const loginButton = document.createElement("button");
+  loginButton.className = "button secondary";
+  loginButton.type = "button";
+  loginButton.textContent = user ? `${user.name}` : "Login";
+  loginButton.addEventListener("click", onLoginClick);
+  actions.appendChild(loginButton);
+
+  if (user) {
+    const logoutButton = document.createElement("button");
+    logoutButton.className = "button secondary";
+    logoutButton.type = "button";
+    logoutButton.textContent = "Logout";
+    logoutButton.addEventListener("click", () => logout());
+    actions.appendChild(logoutButton);
+  }
+
+  return actions;
 }
 
 export function initRouter(root) {
@@ -41,25 +124,85 @@ export function initRouter(root) {
   title.textContent = "EOEX Platform";
   header.appendChild(title);
 
-  const navContainer = document.createElement("div");
-  header.appendChild(navContainer);
+  const tabsContainer = document.createElement("div");
+  header.appendChild(tabsContainer);
+
+  const actionsContainer = document.createElement("div");
+  header.appendChild(actionsContainer);
+
+  const body = document.createElement("div");
+  body.className = "app-body";
 
   const content = document.createElement("main");
   content.className = "app-content";
 
   shell.appendChild(header);
-  shell.appendChild(content);
+  shell.appendChild(body);
+  body.appendChild(content);
   root.appendChild(shell);
 
+  let modalRef = null;
+
+  function closeModal() {
+    if (modalRef) {
+      modalRef.remove();
+      modalRef = null;
+    }
+  }
+
+  function openLoginModal() {
+    closeModal();
+    const users = getUsers();
+    const { user } = getState();
+    modalRef = createLoginModal({
+      users,
+      currentUser: user,
+      onLogin: (email, password) => {
+        const loggedIn = login(email, password);
+        if (loggedIn) {
+          closeModal();
+          render();
+        }
+        return loggedIn;
+      },
+      onClose: () => closeModal(),
+    });
+    document.body.appendChild(modalRef);
+  }
+
+  function ensureAuthenticated() {
+    if (!getState().user) {
+      openLoginModal();
+    }
+  }
+
   function render() {
-    const path = window.location.hash.replace("#", "") || "/crm";
-    navContainer.innerHTML = "";
-    navContainer.appendChild(buildNav(path));
+    const path = window.location.hash.replace("#", "") || getDefaultRoute();
+    const { appCode, tabKey } = resolveRoute(path);
+    setState({ activeApp: appCode, activeTab: tabKey });
+
+    const { user } = getState();
+
+    tabsContainer.innerHTML = "";
+    tabsContainer.appendChild(buildTabs(appCode, tabKey));
+
+    actionsContainer.innerHTML = "";
+    actionsContainer.appendChild(buildTopActions({
+      user,
+      onLoginClick: openLoginModal,
+    }));
+
+    body.querySelector(".app-sidebar")?.remove();
+    body.prepend(buildSidebar(appCode, tabKey));
+
     content.innerHTML = "";
-    const view = resolveRoute(path);
-    view(content);
+    const view = getTabView(appCode, tabKey);
+    if (view) {
+      view(content);
+    }
   }
 
   window.addEventListener("hashchange", render);
   render();
+  ensureAuthenticated();
 }

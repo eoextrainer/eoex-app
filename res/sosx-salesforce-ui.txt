@@ -1,0 +1,53 @@
+refactor the app to reflect the structure, layout and design of the salesforce platoform.
+
+start with a unified tab-based architecture where each module is presented as tabs, as showed in the url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/page/home
+
+
+in the top left corner show the EOEX log and below create a hamburger menu with the list of sosx apps, namely [crm, erp, studio, service]. this menu displays a collapsable dropdown menu with the list of modules inside each app and once clicked then the app dynamically opens the selected module at the selected module tab.
+
+here is the tab structure of each app:
+    CRM
+        dashboard | campaigns | leads | opportunities | accounts | contacts | tasks | reports | calendar (sales forecast calendar)
+    STUDIO
+        dashboard | campaigns | leads | calendar (editorial) | message editor | contents scheduler
+    ERP
+        dashboard | asset manager | finances | hr | strategies | QA & Risk | calendar (business operations planner)
+    SERVICE
+        dashboard | high SLA tickets | mid SLA tickets | low SLA tickets | calendar
+
+in the top right corner create an elegant subtle menu with: notification bell | setup | login
+
+
+create the following users:
+    - system admin: can see everything in the app and impersonate any user for testing
+    - manager: user level commumity leader with elevated privilges, oversight on group member features, results and KPIs
+        1x CRM manager
+        1x Studio manager
+        1x ERP manager
+        1x Services manager
+
+    - users: community users grouped by team with limited access only to features, components and modules assigned to them
+        - CRM users:
+            1x business development user
+            1x sales account manager user
+        - Studio users:
+            1x marketing manager user
+            1x digital marketing user
+            1x marketing campaign manager
+        - ERP users:
+            1x HR manager
+            1x accounting and finance manager
+            1x resource planning managger
+            1x ceo user
+        - Services users:
+            1x level 1 support engineer
+            1x level 2 support engineer
+            1x level 3 support engineer
+all of the users must have the same password and there must be a pop-up login page with a collapsable card that elegantly displays each user credentials for testing
+
+
+fully implement the above criteria.
+fully test the entire application and ensure that each user credential works flawlessly
+check all of the ports currently used by the application
+restart the application
+launch the app on the local browser

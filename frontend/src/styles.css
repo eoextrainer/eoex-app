@@ -29,6 +29,7 @@ body {
   padding: 16px 24px;
   background: #141a24;
   border-bottom: 1px solid #232a3a;
+  gap: 16px;
 }
 
 .app-title {
@@ -37,31 +38,128 @@ body {
   letter-spacing: 0.4px;
 }
 
-.nav-links {
-  display: flex;
+.app-body {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 0;
+}
+
+.app-sidebar {
+  background: #121722;
+  border-right: 1px solid #232a3a;
+  padding: 16px;
+  display: grid;
   gap: 12px;
+  align-content: start;
+  transition: width 0.2s ease;
+}
+
+.app-sidebar.collapsed {
+  width: 72px;
+}
+
+.app-logo {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.hamburger {
+  background: #1f2635;
+  border: 1px solid #2a3348;
+  color: #cdd3e4;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app-list {
+  display: grid;
+  gap: 10px;
+}
+
+.app-group {
+  background: #141a24;
+  border: 1px solid #232a3a;
+  border-radius: 12px;
+  padding: 8px 10px;
+}
+
+.app-group summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #d5dcf1;
+  list-style: none;
+}
+
+.app-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-items {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.app-items a {
+  text-decoration: none;
+  color: #b8c0d6;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #1a2130;
+  font-size: 13px;
+}
+
+.app-items a.active,
+.app-items a:hover {
+  background: #7cf1c7;
+  color: #0f1218;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
-.nav-links a {
+.tab {
   text-decoration: none;
   color: #b8c0d6;
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
   background: #1a2130;
+  font-size: 13px;
   transition: all 0.2s ease;
 }
 
-.nav-links a.active,
-.nav-links a:hover {
+.tab.active,
+.tab:hover {
   color: #0f1218;
   background: #7cf1c7;
+}
+
+.top-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.icon-button {
+  background: #1f2635;
+  border: 1px solid #2a3348;
+  color: #cdd3e4;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
 }
 
 .app-content {
   padding: 24px;
   display: grid;
   gap: 20px;
+  min-width: 0;
 }
 
 .panel {
@@ -169,4 +267,101 @@ body {
   border-radius: 10px;
   background: #1d2536;
   border: 1px dashed #2f3a52;
+}
+
+.bullet {
+  margin: 12px 0 0 0;
+  padding-left: 18px;
+  color: #9aa3bb;
+  display: grid;
+  gap: 4px;
+}
+
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 18, 0.7);
+  display: grid;
+  place-items: center;
+  z-index: 10;
+}
+
+.login-card {
+  width: min(520px, 92vw);
+  background: #141a24;
+  border: 1px solid #232a3a;
+  border-radius: 16px;
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.login-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.login-header h2 {
+  margin: 0;
+}
+
+.login-form {
+  display: grid;
+  gap: 12px;
+}
+
+.login-form input {
+  background: #0f1218;
+  border: 1px solid #2a3348;
+  color: #e6e9f2;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+
+.login-message {
+  font-size: 12px;
+  color: #9aa3bb;
+}
+
+.login-message.error {
+  color: #f58a8a;
+}
+
+.login-quick {
+  display: grid;
+  gap: 10px;
+}
+
+.quick-list {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.credentials {
+  background: #0f1218;
+  border: 1px solid #2a3348;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.credentials summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #cdd3e4;
+}
+
+.credentials-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.credentials-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #9aa3bb;
 }
