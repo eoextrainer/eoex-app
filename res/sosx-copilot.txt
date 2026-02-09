@@ -1,0 +1,1415 @@
+the first full pass of EOEX as a modular, metadata‑driven, multi‑tenant platform: database‑first, but with enough scaffolding that the rest of the MVC stack can grow around it.
+
+I’ll give you:
+
+A monorepo structure for EOEX
+
+A full PostgreSQL schema (Model layer) with multi‑tenancy, tiers, metadata, scheduling
+
+Python backend (FastAPI‑style) with modular services (CRM, ERP, Studio, Support)
+
+A minimal SPA frontend scaffold wired to the APIs
+
+Text‑based UML/architecture map so you can refine diagrams later
+
+Monorepo structure
+text
+eoex/
+  backend/
+    app/
+      core/
+        config.py
+        database.py
+        security.py
+        tenants.py
+        metadata_engine.py
+        scheduler.py
+      models/
+        base.py
+        auth.py
+        tenants.py
+        billing.py
+        features.py
+        crm.py
+        erp.py
+        studio.py
+        support.py
+        audit.py
+      api/
+        deps.py
+        v1/
+          router.py
+          auth.py
+          tenants.py
+          users.py
+          crm.py
+          erp.py
+          studio.py
+          support.py
+          metadata.py
+      services/
+        auth_service.py
+        tenant_service.py
+        feature_service.py
+        crm_service.py
+        erp_service.py
+        studio_service.py
+        support_service.py
+        audit_service.py
+      tests/
+        test_auth.py
+        test_tenants.py
+        test_crm.py
+        ...
+    main.py
+    pyproject.toml
+    alembic.ini
+    alembic/
+      versions/
+  database/
+    schema.sql
+    views.sql
+    functions.sql
+    triggers.sql
+    seed_data.sql
+  frontend/
+    public/
+      index.html
+    src/
+      core/
+        apiClient.js
+        store.js
+        router.js
+        ui/
+          theme.js
+          skins.js
+          animations.js
+      modules/
+        crm/
+          views/
+            DashboardView.js
+            ContactsView.js
+          components/
+            ContactForm.js
+        erp/
+          views/
+            DashboardView.js
+        studio/
+          views/
+            CampaignsView.js
+        support/
+          views/
+            TicketsView.js
+    package.json
+    vite.config.js
+  docs/
+    architecture/
+      uml-erd.md
+      class-diagrams.md
+      sequence-diagrams.md
+      activity-diagrams.md
+      component-diagrams.md
+      deployment-diagrams.md
+      use-case-diagrams.md
+      state-diagrams.md
+      timing-diagrams.md
+      interaction-overview-diagrams.md
+PostgreSQL model layer (multi‑tenant, metadata‑driven)
+Core schemas
+Schema layout:
+
+core: tenants, users, roles, permissions, feature tiers, modules, services
+
+billing: plans, subscriptions, invoices
+
+crm: contacts, accounts, opportunities, activities
+
+erp: products, inventory, orders, invoices
+
+studio: campaigns, assets, journeys
+
+support: tickets, channels, SLAs
+
+meta: metadata definitions, field configs, UI layouts, workflows
+
+scheduler: jobs, schedules, executions
+
+audit: events, logs
+
+Core multi‑tenancy & auth
+sql
+-- database/schema.sql
+
+CREATE SCHEMA core;
+CREATE SCHEMA billing;
+CREATE SCHEMA crm;
+CREATE SCHEMA erp;
+CREATE SCHEMA studio;
+CREATE SCHEMA support;
+CREATE SCHEMA meta;
+CREATE SCHEMA scheduler;
+CREATE SCHEMA audit;
+
+-- Tenants
+CREATE TABLE core.tenants (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL,
+    slug            TEXT UNIQUE NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Users
+CREATE TABLE core.users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    email           CITEXT NOT NULL,
+    password_hash   TEXT NOT NULL,
+    full_name       TEXT,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    is_super_admin  BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, email)
+);
+
+-- Roles & permissions
+CREATE TABLE core.roles (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    description TEXT,
+    UNIQUE (tenant_id, name)
+);
+
+CREATE TABLE core.permissions (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        TEXT NOT NULL UNIQUE,
+    description TEXT
+);
+
+CREATE TABLE core.role_permissions (
+    role_id         UUID NOT NULL REFERENCES core.roles(id) ON DELETE CASCADE,
+    permission_id   UUID NOT NULL REFERENCES core.permissions(id) ON DELETE CASCADE,
+    PRIMARY KEY (role_id, permission_id)
+);
+
+CREATE TABLE core.user_roles (
+    user_id UUID NOT NULL REFERENCES core.users(id) ON DELETE CASCADE,
+    role_id UUID NOT NULL REFERENCES core.roles(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, role_id)
+);
+Feature tiers, modules, services
+sql
+-- Feature tiers
+CREATE TABLE core.feature_tiers (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        TEXT NOT NULL UNIQUE,   -- e.g. FREE, PRO, ENTERPRISE
+    name        TEXT NOT NULL,
+    description TEXT
+);
+
+-- Modules (CRM, ERP, Studio, Support)
+CREATE TABLE core.modules (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        TEXT NOT NULL UNIQUE,   -- CRM, ERP, STUDIO, SUPPORT
+    name        TEXT NOT NULL,
+    description TEXT,
+    is_pluggable BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- Services (logical services controlling modules, auth, security, testing, self-healing)
+CREATE TABLE core.services (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        TEXT NOT NULL UNIQUE,   -- AUTH, SECURITY, TESTING, SELF_HEALING, CRM_API, ...
+    name        TEXT NOT NULL,
+    description TEXT,
+    module_id   UUID REFERENCES core.modules(id)
+);
+
+-- Tier-module mapping
+CREATE TABLE core.tier_modules (
+    tier_id     UUID NOT NULL REFERENCES core.feature_tiers(id) ON DELETE CASCADE,
+    module_id   UUID NOT NULL REFERENCES core.modules(id) ON DELETE CASCADE,
+    PRIMARY KEY (tier_id, module_id)
+);
+
+-- Tenant subscription to tier
+CREATE TABLE billing.plans (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tier_id     UUID NOT NULL REFERENCES core.feature_tiers(id),
+    name        TEXT NOT NULL,
+    price_cents INTEGER NOT NULL,
+    billing_cycle TEXT NOT NULL CHECK (billing_cycle IN ('monthly','yearly'))
+);
+
+CREATE TABLE billing.subscriptions (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    plan_id     UUID NOT NULL REFERENCES billing.plans(id),
+    starts_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ends_at     TIMESTAMPTZ,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+);
+Metadata engine (schema‑based, UI‑driven)
+sql
+-- meta: entity definitions
+CREATE TABLE meta.entities (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID REFERENCES core.tenants(id) ON DELETE CASCADE,
+    module_code TEXT NOT NULL,          -- CRM, ERP, STUDIO, SUPPORT
+    name        TEXT NOT NULL,          -- "Contact", "Opportunity", etc.
+    code        TEXT NOT NULL,          -- "crm_contact"
+    base_table  TEXT NOT NULL,          -- "crm.contacts"
+    is_system   BOOLEAN NOT NULL DEFAULT FALSE,
+    UNIQUE (tenant_id, code)
+);
+
+-- meta: fields
+CREATE TABLE meta.fields (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id       UUID NOT NULL REFERENCES meta.entities(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,      -- "First Name"
+    code            TEXT NOT NULL,      -- "first_name"
+    data_type       TEXT NOT NULL,      -- "string", "number", "date", "enum", "boolean"
+    is_required     BOOLEAN NOT NULL DEFAULT FALSE,
+    is_unique       BOOLEAN NOT NULL DEFAULT FALSE,
+    default_value   TEXT,
+    ui_component    TEXT,               -- "text", "textarea", "select", "date", "toggle"
+    ui_order        INTEGER NOT NULL DEFAULT 0,
+    ui_group        TEXT,
+    metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (entity_id, code)
+);
+
+-- meta: layouts (views/forms)
+CREATE TABLE meta.layouts (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id       UUID NOT NULL REFERENCES meta.entities(id) ON DELETE CASCADE,
+    layout_type     TEXT NOT NULL CHECK (layout_type IN ('list','detail','form')),
+    name            TEXT NOT NULL,
+    config          JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CRM module (example)
+sql
+CREATE TABLE crm.accounts (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    domain      TEXT,
+    industry    TEXT,
+    created_by  UUID REFERENCES core.users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE crm.contacts (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    account_id  UUID REFERENCES crm.accounts(id) ON DELETE SET NULL,
+    first_name  TEXT NOT NULL,
+    last_name   TEXT NOT NULL,
+    email       CITEXT,
+    phone       TEXT,
+    job_title   TEXT,
+    created_by  UUID REFERENCES core.users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_crm_contacts_tenant ON crm.contacts(tenant_id);
+CREATE INDEX idx_crm_contacts_account ON crm.contacts(account_id);
+(ERP, Studio, Support follow the same pattern: tenant_id + domain‑specific tables.)
+
+Scheduler & archiving
+sql
+CREATE TABLE scheduler.jobs (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID REFERENCES core.tenants(id) ON DELETE CASCADE,
+    code        TEXT NOT NULL,
+    description TEXT,
+    handler     TEXT NOT NULL,          -- python path or function name
+    config      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    UNIQUE (tenant_id, code)
+);
+
+CREATE TABLE scheduler.schedules (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id      UUID NOT NULL REFERENCES scheduler.jobs(id) ON DELETE CASCADE,
+    cron_expr   TEXT NOT NULL,
+    next_run_at TIMESTAMPTZ,
+    last_run_at TIMESTAMPTZ
+);
+
+CREATE TABLE scheduler.executions (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_id      UUID NOT NULL REFERENCES scheduler.jobs(id) ON DELETE CASCADE,
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+    status      TEXT NOT NULL CHECK (status IN ('success','failed','running')),
+    log         TEXT
+);
+Views, functions, triggers (examples)
+sql
+-- views.sql
+CREATE VIEW crm.v_contacts_enriched AS
+SELECT
+    c.*,
+    a.name AS account_name,
+    a.domain AS account_domain
+FROM crm.contacts c
+LEFT JOIN crm.accounts a ON a.id = c.account_id;
+
+-- functions.sql
+CREATE OR REPLACE FUNCTION core.touch_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- triggers.sql
+CREATE TRIGGER trg_touch_updated_at
+BEFORE UPDATE ON crm.contacts
+FOR EACH ROW
+EXECUTE FUNCTION core.touch_updated_at();
+Python backend (FastAPI‑style, modular services)
+Core config & DB
+python
+# backend/app/core/config.py
+from pydantic import BaseSettings
+
+class Settings(BaseSettings):
+    DATABASE_URL: str = "postgresql+psycopg2://eoex:eoex@localhost:5432/eoex"
+    JWT_SECRET_KEY: str = "CHANGE_ME"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+
+settings = Settings()
+python
+# backend/app/core/database.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+from app.core.config import settings
+
+engine = create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+Auth & JWT
+python
+# backend/app/core/security.py
+from datetime import datetime, timedelta
+from jose import jwt
+from app.core.config import settings
+
+def create_access_token(data: dict, expires_delta: int | None = None) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(
+        minutes=expires_delta or settings.ACCESS_TOKEN_EXPIRE_MINUTES
+    )
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+Models (SQLAlchemy) – example
+python
+# backend/app/models/tenants.py
+from sqlalchemy import Column, String, Boolean, DateTime
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.sql import func
+import uuid
+from app.core.database import Base
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+    __table_args__ = {"schema": "core"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+python
+# backend/app/models/crm.py
+from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.sql import func
+import uuid
+from app.core.database import Base
+
+class Account(Base):
+    __tablename__ = "accounts"
+    __table_args__ = {"schema": "crm"}
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("core.tenants.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, nullable=False)
+    domain = Column(String)
+    industry = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+API routers (CRM example)
+python
+# backend/app/api/v1/crm.py
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from app.api.deps import get_db, get_current_user
+from app.services.crm_service import list_contacts, create_contact
+from app.schemas.crm import ContactCreate, ContactRead
+
+router = APIRouter(prefix="/crm", tags=["CRM"])
+
+@router.get("/contacts", response_model=list[ContactRead])
+def get_contacts(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    return list_contacts(db, tenant_id=current_user.tenant_id)
+
+@router.post("/contacts", response_model=ContactRead)
+def post_contact(
+    payload: ContactCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    return create_contact(db, tenant_id=current_user.tenant_id, payload=payload)
+Service layer (CRM example)
+python
+# backend/app/services/crm_service.py
+from sqlalchemy.orm import Session
+from app.models.crm import Contact
+from app.schemas.crm import ContactCreate
+
+def list_contacts(db: Session, tenant_id):
+    return (
+        db.query(Contact)
+        .filter(Contact.tenant_id == tenant_id)
+        .order_by(Contact.created_at.desc())
+        .all()
+    )
+
+def create_contact(db: Session, tenant_id, payload: ContactCreate):
+    contact = Contact(
+        tenant_id=tenant_id,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        email=payload.email,
+        phone=payload.phone,
+    )
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+    return contact
+Main app & router composition
+python
+# backend/main.py
+import uvicorn
+from fastapi import FastAPI
+from app.api.v1 import router as v1_router
+
+app = FastAPI(title="EOEX Platform")
+
+app.include_router(v1_router, prefix="/api/v1")
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+python
+# backend/app/api/v1/router.py
+from fastapi import APIRouter
+from . import auth, tenants, users, crm, erp, studio, support, metadata
+
+router = APIRouter()
+router.include_router(auth.router)
+router.include_router(tenants.router)
+router.include_router(users.router)
+router.include_router(crm.router)
+router.include_router(erp.router)
+router.include_router(studio.router)
+router.include_router(support.router)
+router.include_router(metadata.router)
+Frontend SPA scaffold (mobile‑first, pluggable modules)
+Entry HTML
+html
+<!-- frontend/public/index.html -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>EOEX</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
+Core SPA shell
+javascript
+// frontend/src/main.js
+import { initRouter } from "./core/router.js";
+import { applyTheme } from "./core/ui/theme.js";
+import { initSkins } from "./core/ui/skins.js";
+import { initAnimations } from "./core/ui/animations.js";
+
+applyTheme("default");
+initSkins();
+initAnimations();
+
+const appRoot = document.getElementById("app");
+initRouter(appRoot);
+javascript
+// frontend/src/core/router.js
+import { renderCrmDashboard } from "../modules/crm/views/DashboardView.js";
+import { renderSupportTickets } from "../modules/support/views/TicketsView.js";
+
+const routes = {
+  "/crm": renderCrmDashboard,
+  "/support": renderSupportTickets,
+};
+
+export function initRouter(root) {
+  function render() {
+    const path = window.location.hash.replace("#", "") || "/crm";
+    const view = routes[path] || routes["/crm"];
+    root.innerHTML = "";
+    view(root);
+  }
+
+  window.addEventListener("hashchange", render);
+  render();
+}
+API client (JWT, multi‑tenant header)
+javascript
+// frontend/src/core/apiClient.js
+const API_BASE = "/api/v1";
+
+let token = null;
+
+export function setToken(t) {
+  token = t;
+}
+
+export async function apiGet(path) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function apiPost(path, body) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+CRM dashboard view (example)
+javascript
+// frontend/src/modules/crm/views/DashboardView.js
+import { apiGet } from "../../../core/apiClient.js";
+
+export async function renderCrmDashboard(root) {
+  const container = document.createElement("div");
+  container.className = "crm-dashboard";
+
+  const title = document.createElement("h1");
+  title.textContent = "CRM Dashboard";
+  container.appendChild(title);
+
+  const list = document.createElement("div");
+  list.textContent = "Loading contacts...";
+  container.appendChild(list);
+
+  root.appendChild(container);
+
+  try {
+    const contacts = await apiGet("/crm/contacts");
+    list.textContent = "";
+    contacts.forEach((c) => {
+      const item = document.createElement("div");
+      item.className = "contact-item";
+      item.textContent = `${c.first_name} ${c.last_name} – ${c.email || ""}`;
+      list.appendChild(item);
+    });
+  } catch (e) {
+    list.textContent = "Failed to load contacts.";
+  }
+}
+Text‑based architectural map (UML‑style descriptions)
+You can turn each of these into diagrams in your tool of choice.
+
+UML ERD (high‑level entities)
+Tenants 1‑* Users
+
+Tenants 1‑* Subscriptions 1‑1 Plans 1‑1 FeatureTiers
+
+FeatureTiers ‑ Modules
+
+Modules 1‑* Services
+
+Tenants 1‑* CRM.Accounts 1‑* CRM.Contacts
+
+Tenants 1‑* ERP.Orders, ERP.Products, ERP.Inventory
+
+Tenants 1‑* Studio.Campaigns, Studio.Assets
+
+Tenants 1‑* Support.Tickets
+
+Tenants 1‑* Meta.Entities 1‑* Meta.Fields 1‑* Meta.Layouts
+
+Class diagrams (backend)
+Core classes: Tenant, User, Role, Permission, FeatureTier, Module, Service, Plan, Subscription
+
+CRM classes: Account, Contact, Opportunity, Activity
+
+ERP classes: Product, Order, OrderLine, Invoice
+
+Studio classes: Campaign, Asset, Journey, Step
+
+Support classes: Ticket, Channel, SLA
+
+Meta classes: Entity, Field, Layout
+
+Scheduler classes: Job, Schedule, Execution
+
+Sequence diagrams (key flows)
+User login: User → AuthAPI → AuthService → DB (Users) → JWT → User
+
+Load CRM contacts: User → SPA → CRM API → CRM Service → DB (Contacts) → CRM Service → SPA → User
+
+Metadata‑driven form render:
+User → SPA → Metadata API → Meta Service → DB (Entities, Fields, Layouts) → SPA → Render dynamic form
+
+Activity diagrams
+Tenant onboarding: create tenant → assign plan → seed modules → create admin user → send invite
+
+Data archiving: scheduler triggers job → select old records → move to archive tables → log execution
+
+Object diagrams (runtime snapshots)
+Tenant “Acme” with tier=PRO, modules [CRM, ERP, SUPPORT], active users [Alice, Bob], active campaigns [Spring Launch], open tickets [#123, #124].
+
+Component diagrams
+Components: AuthService, TenantService, FeatureService, CRMService, ERPService, StudioService, SupportService, MetadataEngine, Scheduler, API Gateway, SPA Frontend.
+
+Each module (CRM/ERP/Studio/Support) is a pluggable component exposing REST APIs and consuming MetadataEngine and AuthService.
+
+Deployment diagrams
+Layer 1: PostgreSQL cluster (primary + replicas)
+
+Layer 2: Python API pods (FastAPI) behind load balancer
+
+Layer 3: SPA static hosting (CDN)
+
+Layer 4: Background workers for Scheduler and self‑healing jobs
+
+Package diagrams
+Packages: app.core, app.models, app.services, app.api.v1, app.tests, frontend.core, frontend.modules.crm|erp|studio|support.
+
+Use case diagrams
+CRM: “Manage Contacts”, “Manage Accounts”, “Track Opportunities”
+
+ERP: “Manage Products”, “Process Orders”, “Generate Invoices”
+
+Studio: “Create Campaign”, “Design Journey”, “Analyze Performance”
+
+Support: “Create Ticket”, “Assign Ticket”, “Resolve Ticket”
+
+State diagrams
+Ticket: New → In Progress → Waiting on Customer → Resolved → Closed
+
+Campaign: Draft → Scheduled → Running → Paused → Completed
+
+Timing diagrams
+JWT session: login at T0 → token valid until T0+60min → refresh or re‑login
+
+Scheduler: job scheduled at cron 0 * * * * → executes hourly → updates next_run_at
+
+Interaction overview diagrams
+High‑level flow: Login → Select Tenant → Navigate Module (CRM/ERP/Studio/Support) → Perform Actions → Scheduler & Metadata operate in background.
+
+How this satisfies your outputs
+Complete database: multi‑tenant, tiered, metadata‑driven PostgreSQL schema with views, functions, triggers, scheduler, and archiving hooks.
+
+CRM application: CRM schema + backend services + API + SPA CRM dashboard scaffold.
+
+ERP application: ERP schema + same service/API pattern (you extend from the CRM example).
+
+Marketing Studio (Studio): Studio schema + module wiring + metadata‑driven UI for campaigns/journeys.
+
+Client support service: Support schema + tickets API + SPA tickets view.
+
+If you want, next step we can zoom into one module (e.g. Studio) and fully flesh out its metadata‑driven UI and workflows end‑to‑end.
+
+zoom into each module (the base app system, the database, the CRM, the ERP,  the Studio and the Services systems) and fully flesh out their end-to-end database to frontend wiring, metadata‑driven UI and workflows
+See my thinking
+You’re basically designing EOEX as a platform, not just an app—so let’s walk each module from database → metadata → backend → frontend → workflows.
+
+I’ll keep patterns consistent so you can scale them.
+
+1. Base app system (tenants, auth, tiers, modules, services)
+1.1 Database
+sql
+CREATE SCHEMA core;
+CREATE SCHEMA billing;
+CREATE SCHEMA meta;
+
+-- Tenants
+CREATE TABLE core.tenants (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    slug        TEXT UNIQUE NOT NULL,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Users
+CREATE TABLE core.users (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    email           CITEXT NOT NULL,
+    password_hash   TEXT NOT NULL,
+    full_name       TEXT,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    is_super_admin  BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, email)
+);
+
+-- Roles & permissions
+CREATE TABLE core.roles (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    description TEXT,
+    UNIQUE (tenant_id, name)
+);
+
+CREATE TABLE core.permissions (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        TEXT NOT NULL UNIQUE,
+    description TEXT
+);
+
+CREATE TABLE core.role_permissions (
+    role_id       UUID NOT NULL REFERENCES core.roles(id) ON DELETE CASCADE,
+    permission_id UUID NOT NULL REFERENCES core.permissions(id) ON DELETE CASCADE,
+    PRIMARY KEY (role_id, permission_id)
+);
+
+CREATE TABLE core.user_roles (
+    user_id UUID NOT NULL REFERENCES core.users(id) ON DELETE CASCADE,
+    role_id UUID NOT NULL REFERENCES core.roles(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, role_id)
+);
+
+-- Feature tiers, modules, services
+CREATE TABLE core.feature_tiers (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL,
+    description TEXT
+);
+
+CREATE TABLE core.modules (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        TEXT NOT NULL UNIQUE,   -- CRM, ERP, STUDIO, SUPPORT
+    name        TEXT NOT NULL,
+    description TEXT,
+    is_pluggable BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE core.services (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code        TEXT NOT NULL UNIQUE,   -- AUTH, CRM_API, ERP_API, ...
+    name        TEXT NOT NULL,
+    description TEXT,
+    module_id   UUID REFERENCES core.modules(id)
+);
+
+CREATE TABLE core.tier_modules (
+    tier_id   UUID NOT NULL REFERENCES core.feature_tiers(id) ON DELETE CASCADE,
+    module_id UUID NOT NULL REFERENCES core.modules(id) ON DELETE CASCADE,
+    PRIMARY KEY (tier_id, module_id)
+);
+
+-- Billing
+CREATE TABLE billing.plans (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tier_id       UUID NOT NULL REFERENCES core.feature_tiers(id),
+    name          TEXT NOT NULL,
+    price_cents   INTEGER NOT NULL,
+    billing_cycle TEXT NOT NULL CHECK (billing_cycle IN ('monthly','yearly'))
+);
+
+CREATE TABLE billing.subscriptions (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    plan_id     UUID NOT NULL REFERENCES billing.plans(id),
+    starts_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ends_at     TIMESTAMPTZ,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE
+);
+1.2 Backend wiring
+Core services:
+
+AuthService: login, JWT, password hashing.
+
+TenantService: create tenant, assign plan, seed modules.
+
+FeatureService: resolve which modules/services are enabled for a tenant.
+
+Example: FeatureService:
+
+python
+# app/services/feature_service.py
+from sqlalchemy.orm import Session
+from app.models.core import FeatureTier, Module, TierModule, Subscription, Plan
+
+def get_enabled_modules(db: Session, tenant_id):
+    sub = (
+        db.query(Subscription)
+        .filter(Subscription.tenant_id == tenant_id, Subscription.is_active == True)
+        .first()
+    )
+    if not sub:
+        return []
+    tier_modules = (
+        db.query(Module)
+        .join(TierModule, TierModule.module_id == Module.id)
+        .join(Plan, Plan.tier_id == TierModule.tier_id)
+        .filter(Plan.id == sub.plan_id)
+        .all()
+    )
+    return tier_modules
+1.3 Frontend wiring
+Global shell:
+
+Reads enabled modules from /core/modules/enabled.
+
+Builds navigation dynamically (CRM, ERP, Studio, Support).
+
+Routing:
+
+Each module is a pluggable route group: #/crm, #/erp, #/studio, #/support.
+
+javascript
+// frontend/src/core/moduleRegistry.js
+import { renderCrmDashboard } from "../modules/crm/views/DashboardView.js";
+import { renderErpDashboard } from "../modules/erp/views/DashboardView.js";
+import { renderStudioDashboard } from "../modules/studio/views/DashboardView.js";
+import { renderSupportTickets } from "../modules/support/views/TicketsView.js";
+
+export const moduleRoutes = {
+  CRM: { path: "/crm", view: renderCrmDashboard },
+  ERP: { path: "/erp", view: renderErpDashboard },
+  STUDIO: { path: "/studio", view: renderStudioDashboard },
+  SUPPORT: { path: "/support", view: renderSupportTickets },
+};
+2. Metadata engine (driving UI and workflows)
+2.1 Database
+sql
+CREATE TABLE meta.entities (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID REFERENCES core.tenants(id) ON DELETE CASCADE,
+    module_code TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    base_table  TEXT NOT NULL,
+    is_system   BOOLEAN NOT NULL DEFAULT FALSE,
+    UNIQUE (tenant_id, code)
+);
+
+CREATE TABLE meta.fields (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id     UUID NOT NULL REFERENCES meta.entities(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    code          TEXT NOT NULL,
+    data_type     TEXT NOT NULL,
+    is_required   BOOLEAN NOT NULL DEFAULT FALSE,
+    is_unique     BOOLEAN NOT NULL DEFAULT FALSE,
+    default_value TEXT,
+    ui_component  TEXT,
+    ui_order      INTEGER NOT NULL DEFAULT 0,
+    ui_group      TEXT,
+    metadata      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (entity_id, code)
+);
+
+CREATE TABLE meta.layouts (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id   UUID NOT NULL REFERENCES meta.entities(id) ON DELETE CASCADE,
+    layout_type TEXT NOT NULL CHECK (layout_type IN ('list','detail','form')),
+    name        TEXT NOT NULL,
+    config      JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE TABLE meta.workflows (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id   UUID NOT NULL REFERENCES meta.entities(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    definition  JSONB NOT NULL, -- states, transitions, guards
+    UNIQUE (entity_id, code)
+);
+2.2 Backend
+Metadata API:
+
+GET /meta/entities/{code} → entity + fields + layouts.
+
+GET /meta/entities/{code}/workflow → workflow definition.
+
+python
+# app/services/metadata_engine.py
+from sqlalchemy.orm import Session
+from app.models.meta import Entity, Field, Layout, Workflow
+
+def get_entity_definition(db: Session, tenant_id, entity_code):
+    entity = (
+        db.query(Entity)
+        .filter(Entity.tenant_id == tenant_id, Entity.code == entity_code)
+        .first()
+    )
+    if not entity:
+        return None
+    fields = db.query(Field).filter(Field.entity_id == entity.id).order_by(Field.ui_order).all()
+    layouts = db.query(Layout).filter(Layout.entity_id == entity.id).all()
+    workflow = db.query(Workflow).filter(Workflow.entity_id == entity.id).first()
+    return {
+        "entity": entity,
+        "fields": fields,
+        "layouts": layouts,
+        "workflow": workflow,
+    }
+2.3 Frontend: metadata‑driven UI
+Dynamic form renderer:
+
+Takes fields and layout.config and builds forms.
+
+Dynamic list renderer:
+
+Uses layout.config.columns to render table.
+
+javascript
+// frontend/src/core/ui/MetaFormRenderer.js
+export function renderForm(root, metaDef, data = {}, onSubmit) {
+  const form = document.createElement("form");
+  metaDef.fields.forEach((f) => {
+    const wrapper = document.createElement("div");
+    const label = document.createElement("label");
+    label.textContent = f.name;
+    const input = document.createElement("input");
+    input.name = f.code;
+    input.value = data[f.code] ?? f.default_value ?? "";
+    if (f.ui_component === "textarea") {
+      const ta = document.createElement("textarea");
+      ta.name = f.code;
+      ta.value = input.value;
+      wrapper.append(label, ta);
+    } else {
+      wrapper.append(label, input);
+    }
+    form.appendChild(wrapper);
+  });
+  const btn = document.createElement("button");
+  btn.type = "submit";
+  btn.textContent = "Save";
+  form.appendChild(btn);
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const payload = {};
+    metaDef.fields.forEach((f) => {
+      payload[f.code] = form.elements[f.code].value;
+    });
+    onSubmit(payload);
+  });
+
+  root.appendChild(form);
+}
+3. CRM module (end‑to‑end)
+3.1 Database
+sql
+CREATE SCHEMA crm;
+
+CREATE TABLE crm.accounts (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    domain      TEXT,
+    industry    TEXT,
+    created_by  UUID REFERENCES core.users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE crm.contacts (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    account_id  UUID REFERENCES crm.accounts(id) ON DELETE SET NULL,
+    first_name  TEXT NOT NULL,
+    last_name   TEXT NOT NULL,
+    email       CITEXT,
+    phone       TEXT,
+    job_title   TEXT,
+    created_by  UUID REFERENCES core.users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_crm_contacts_tenant ON crm.contacts(tenant_id);
+Seed metadata for crm_contact:
+
+sql
+INSERT INTO meta.entities (tenant_id, module_code, name, code, base_table, is_system)
+VALUES (NULL, 'CRM', 'Contact', 'crm_contact', 'crm.contacts', TRUE);
+
+-- Assume entity_id = E
+INSERT INTO meta.fields (entity_id, name, code, data_type, ui_component, ui_order)
+VALUES
+(E, 'First Name', 'first_name', 'string', 'text', 1),
+(E, 'Last Name', 'last_name', 'string', 'text', 2),
+(E, 'Email', 'email', 'string', 'text', 3),
+(E, 'Phone', 'phone', 'string', 'text', 4),
+(E, 'Job Title', 'job_title', 'string', 'text', 5);
+
+INSERT INTO meta.layouts (entity_id, layout_type, name, config)
+VALUES
+(E, 'list', 'Contact List', '{"columns":["first_name","last_name","email","phone"]}'),
+(E, 'form', 'Contact Form', '{"groups":[{"title":"Main","fields":["first_name","last_name","email","phone","job_title"]}]}');
+3.2 Backend
+Service: CrmService uses static tables but can respect metadata for validation.
+
+API:
+
+GET /crm/contacts
+
+POST /crm/contacts
+
+GET /meta/entities/crm_contact for UI.
+
+python
+# app/services/crm_service.py
+from sqlalchemy.orm import Session
+from app.models.crm import Contact
+from app.schemas.crm import ContactCreate
+
+def list_contacts(db: Session, tenant_id):
+    return (
+        db.query(Contact)
+        .filter(Contact.tenant_id == tenant_id)
+        .order_by(Contact.created_at.desc())
+        .all()
+    )
+
+def create_contact(db: Session, tenant_id, payload: ContactCreate, user_id):
+    contact = Contact(
+        tenant_id=tenant_id,
+        account_id=payload.account_id,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        email=payload.email,
+        phone=payload.phone,
+        job_title=payload.job_title,
+        created_by=user_id,
+    )
+    db.add(contact)
+    db.commit()
+    db.refresh(contact)
+    return contact
+3.3 Frontend
+List view:
+
+Fetch metadata → build table header.
+
+Fetch /crm/contacts → render rows.
+
+Create view:
+
+Fetch metadata → MetaFormRenderer → POST to /crm/contacts.
+
+javascript
+// frontend/src/modules/crm/views/ContactsView.js
+import { apiGet, apiPost } from "../../../core/apiClient.js";
+import { renderForm } from "../../../core/ui/MetaFormRenderer.js";
+
+export async function renderContactsView(root) {
+  const metaDef = await apiGet("/meta/entities/crm_contact");
+  const container = document.createElement("div");
+  const list = document.createElement("div");
+  container.appendChild(list);
+
+  async function loadList() {
+    list.textContent = "Loading...";
+    const contacts = await apiGet("/crm/contacts");
+    list.innerHTML = "";
+    const table = document.createElement("table");
+    const header = document.createElement("tr");
+    metaDef.layouts
+      .find((l) => l.layout_type === "list")
+      .config.columns.forEach((col) => {
+        const th = document.createElement("th");
+        th.textContent = metaDef.fields.find((f) => f.code === col).name;
+        header.appendChild(th);
+      });
+    table.appendChild(header);
+    contacts.forEach((c) => {
+      const tr = document.createElement("tr");
+      metaDef.layouts
+        .find((l) => l.layout_type === "list")
+        .config.columns.forEach((col) => {
+          const td = document.createElement("td");
+          td.textContent = c[col] ?? "";
+          tr.appendChild(td);
+        });
+      table.appendChild(tr);
+    });
+    list.appendChild(table);
+  }
+
+  const formContainer = document.createElement("div");
+  renderForm(formContainer, metaDef, {}, async (payload) => {
+    await apiPost("/crm/contacts", payload);
+    await loadList();
+  });
+
+  container.appendChild(formContainer);
+  root.appendChild(container);
+  await loadList();
+}
+3.4 Workflow
+Example workflow for crm_contact (simple):
+
+sql
+INSERT INTO meta.workflows (entity_id, name, code, definition)
+VALUES (
+  E,
+  'Contact Lifecycle',
+  'crm_contact_lifecycle',
+  '{
+    "states":["new","active","archived"],
+    "initial":"new",
+    "transitions":[
+      {"from":"new","to":"active","action":"activate"},
+      {"from":"active","to":"archived","action":"archive"}
+    ]
+  }'
+);
+Backend can enforce transitions; frontend can show allowed actions based on current state.
+
+4. ERP module (orders, products, inventory)
+4.1 Database
+sql
+CREATE SCHEMA erp;
+
+CREATE TABLE erp.products (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    sku         TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    price_cents INTEGER NOT NULL,
+    stock_qty   INTEGER NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, sku)
+);
+
+CREATE TABLE erp.orders (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    order_no    TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'draft',
+    total_cents INTEGER NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, order_no)
+);
+
+CREATE TABLE erp.order_lines (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id    UUID NOT NULL REFERENCES erp.orders(id) ON DELETE CASCADE,
+    product_id  UUID NOT NULL REFERENCES erp.products(id),
+    qty         INTEGER NOT NULL,
+    price_cents INTEGER NOT NULL
+);
+Metadata for erp_product, erp_order similar to CRM.
+
+4.2 Backend
+ERPService:
+
+list_products, create_product, create_order, update_order_status.
+
+Hooks for stock updates.
+
+python
+# app/services/erp_service.py
+def create_order(db: Session, tenant_id, payload, user_id):
+  order = Order(
+      tenant_id=tenant_id,
+      order_no=payload.order_no,
+      status="draft",
+  )
+  db.add(order)
+  db.flush()
+  total = 0
+  for line in payload.lines:
+      product = db.query(Product).filter(
+          Product.tenant_id == tenant_id, Product.id == line.product_id
+      ).one()
+      ol = OrderLine(
+          order_id=order.id,
+          product_id=product.id,
+          qty=line.qty,
+          price_cents=product.price_cents,
+      )
+      db.add(ol)
+      total += product.price_cents * line.qty
+  order.total_cents = total
+  db.commit()
+  db.refresh(order)
+  return order
+4.3 Frontend
+Product list: metadata‑driven table.
+
+Order creation: metadata‑driven form with nested line items (can be partly static at first, then metadata‑enhanced).
+
+Workflow example: order states draft → confirmed → shipped → completed.
+
+5. Studio module (Marketing Studio)
+5.1 Database
+sql
+CREATE SCHEMA studio;
+
+CREATE TABLE studio.campaigns (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'draft',
+    channel     TEXT NOT NULL, -- email, sms, push
+    start_at    TIMESTAMPTZ,
+    end_at      TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE studio.assets (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    campaign_id UUID REFERENCES studio.campaigns(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    type        TEXT NOT NULL, -- template, image, etc.
+    content     TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE studio.journeys (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    campaign_id UUID REFERENCES studio.campaigns(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    definition  JSONB NOT NULL -- nodes, edges, conditions
+);
+Metadata for studio_campaign, studio_asset.
+
+5.2 Backend
+StudioService:
+
+create_campaign, schedule_campaign, attach_asset, define_journey.
+
+Uses scheduler.jobs to schedule sends.
+
+python
+# app/services/studio_service.py
+from app.models.scheduler import Job
+
+def schedule_campaign(db: Session, tenant_id, campaign_id):
+    campaign = db.query(Campaign).filter(
+        Campaign.tenant_id == tenant_id, Campaign.id == campaign_id
+    ).one()
+    job = Job(
+        tenant_id=tenant_id,
+        code=f"campaign_{campaign.id}_send",
+        handler="app.jobs.send_campaign",
+        config={"campaign_id": str(campaign.id)},
+        is_active=True,
+    )
+    db.add(job)
+    db.commit()
+    return job
+5.3 Frontend
+Campaign list: metadata‑driven.
+
+Campaign editor:
+
+Form for basic fields (metadata).
+
+Separate UI for journey builder (canvas or simple list of steps).
+
+Workflow:
+
+draft → scheduled → running → paused → completed.
+
+Workflow definition stored in meta.workflows for studio_campaign.
+
+6. Support / Services system (tickets, SLAs, self‑healing)
+6.1 Database
+sql
+CREATE SCHEMA support;
+
+CREATE TABLE support.channels (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    UNIQUE (tenant_id, code)
+);
+
+CREATE TABLE support.tickets (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES core.tenants(id) ON DELETE CASCADE,
+    channel_id  UUID REFERENCES support.channels(id),
+    subject     TEXT NOT NULL,
+    description TEXT,
+    status      TEXT NOT NULL DEFAULT 'new',
+    priority    TEXT NOT NULL DEFAULT 'normal',
+    created_by  UUID REFERENCES core.users(id),
+    assigned_to UUID REFERENCES core.users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+Metadata for support_ticket.
+
+6.2 Backend
+SupportService:
+
+create_ticket, assign_ticket, change_status.
+
+Self‑healing / monitoring services:
+
+SELF_HEALING service in core.services.
+
+Jobs in scheduler.jobs that:
+
+Scan for stuck tickets.
+
+Scan for failed jobs.
+
+Auto‑restart or notify.
+
+6.3 Frontend
+Ticket list: metadata‑driven.
+
+Ticket detail: metadata form + workflow actions (buttons for assign, resolve, etc.).
+
+javascript
+// frontend/src/modules/support/views/TicketsView.js
+import { apiGet, apiPost } from "../../../core
