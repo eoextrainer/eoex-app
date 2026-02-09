@@ -48,6 +48,68 @@ all of the users must have the same password and there must be a pop-up login pa
 
 fully implement the above criteria.
 fully test the entire application and ensure that each user credential works flawlessly
-check all of the ports currently used by the application
+check and free all of the ports currently used by the application
+restart the application
+launch the app on the local browser
+
+
+
+
+
+
+
+inside each app module (tab) you must group the services by cards containing features by grouping
+example:
+    CRM
+        dashboard
+            copy the dashboard tiles in url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/page/home
+        campaigns
+            shows a list view of campaigns like url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/o/Campaign/list?filterName=AllActiveCampaigns
+                one campaign view must be built and organised exactly like url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/r/Campaign/701J9000000tSykIAE/view
+        leads
+            shows the leads list view like in url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/o/Lead/pipelineInspection?filterName=00BJ9000004g5nTMAQ
+                one lead view must be like url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/r/Lead/00QJ90000034SszMAE/view
+        opportunities
+            shows the opportunities list view like url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/o/Opportunity/list?filterName=AllOpportunities
+                one opportunity view must be like: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/r/Opportunity/006J900000BapCsIAJ/view
+        accounts
+            shows the accounts list view as in url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/o/Account/list?filterName=AllAccounts
+                one account view must be like: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/r/Account/001J900000MQPDIIA5/view
+        contacts
+            shows the contacts list view like: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/o/Contact/pipelineInspection?filterName=00BJ9000004g5nYMAQ
+                one contact view must be like url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/r/Contact/003J900000KYHGLIA5/view
+        tasks
+            shows tasks list views like url: https://curious-goat-24lain-dev-ed.trailblaze.lightning.force.com/lightning/o/Task/list?filterName=OpenTasks
+        reports
+        calendar (sales forecast calendar)
+            show a card based year calendar (2026) with entries for for the relevant calendar entries (here for a CRM)
+
+
+Repeat this format for the ERP, the Studio and the Services
+
+
+this the is matrix of access and visibility by user:
+
+    - CRM users: only the relevant users can see this tab, its components and its contents, for the other users this part must be invisible
+            1x business development user
+            1x sales account manager user
+        - Studio users: only the relevant users can see this tab, its components and its contents, for the other users this part must be invisible
+            1x marketing manager user
+            1x digital marketing user
+            1x marketing campaign manager
+        - ERP users: only the relevant users can see this tab, its components and its contents, for the other users this part must be invisible
+            1x HR manager
+            1x accounting and finance manager
+            1x resource planning managger
+            1x ceo user
+        - Services users: only the relevant users can see this tab, its components and its contents, for the other users this part must be invisible
+            1x level 1 support engineer
+            1x level 2 support engineer
+            1x level 3 support engineer
+        - Admin Portal: only the relevant users can see this tab, its components and its contents, for the other users this part must be invisible
+
+fully implement the above criteria.
+fully test the entire application and ensure that each user credential works flawlessly
+check and free all of the ports currently used by the application
 restart the application
 launch the app on the local browser

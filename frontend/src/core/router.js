@@ -6,6 +6,7 @@ import {
   getDefaultRoute,
   resolveRoute,
   getTabView,
+  getVisibleApps,
 } from "./moduleRegistry.js";
 import { createLoginModal } from "./ui/LoginModal.js";
 
@@ -27,7 +28,7 @@ function buildTabs(appCode, activeTab) {
   return tabBar;
 }
 
-function buildSidebar(activeApp, activeTab) {
+function buildSidebar(activeApp, activeTab, visibleApps) {
   const sidebar = document.createElement("aside");
   sidebar.className = "app-sidebar";
 
@@ -39,7 +40,7 @@ function buildSidebar(activeApp, activeTab) {
   const hamburger = document.createElement("button");
   hamburger.className = "hamburger";
   hamburger.type = "button";
-  hamburger.textContent = "☰ Apps";
+  hamburger.textContent = "☰ SOSX Apps";
   hamburger.addEventListener("click", () => {
     sidebar.classList.toggle("collapsed");
   });
@@ -49,6 +50,7 @@ function buildSidebar(activeApp, activeTab) {
   list.className = "app-list";
 
   appOrder.forEach((appCode) => {
+    if (!visibleApps.includes(appCode)) return;
     const app = appModules[appCode];
     if (!app) return;
     const section = document.createElement("details");
@@ -179,12 +181,20 @@ export function initRouter(root) {
   function render() {
     const path = window.location.hash.replace("#", "") || getDefaultRoute();
     const { appCode, tabKey } = resolveRoute(path);
-    setState({ activeApp: appCode, activeTab: tabKey });
-
     const { user } = getState();
+    const visibleApps = getVisibleApps(user);
+
+    const nextApp = visibleApps.includes(appCode)
+      ? appCode
+      : visibleApps[0] || "CRM";
+    const nextTab = appModules[nextApp]?.tabs.find((tab) => tab.key === tabKey)
+      ? tabKey
+      : appModules[nextApp]?.tabs[0]?.key || "dashboard";
+
+    setState({ activeApp: nextApp, activeTab: nextTab });
 
     tabsContainer.innerHTML = "";
-    tabsContainer.appendChild(buildTabs(appCode, tabKey));
+    tabsContainer.appendChild(buildTabs(nextApp, nextTab));
 
     actionsContainer.innerHTML = "";
     actionsContainer.appendChild(buildTopActions({
@@ -193,10 +203,10 @@ export function initRouter(root) {
     }));
 
     body.querySelector(".app-sidebar")?.remove();
-    body.prepend(buildSidebar(appCode, tabKey));
+    body.prepend(buildSidebar(nextApp, nextTab, visibleApps));
 
     content.innerHTML = "";
-    const view = getTabView(appCode, tabKey);
+    const view = getTabView(nextApp, nextTab);
     if (view) {
       view(content);
     }
